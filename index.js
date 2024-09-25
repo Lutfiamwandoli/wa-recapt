@@ -222,7 +222,18 @@ status: selesai
         } else {
             message.reply(`Kategori ${category} ga ada bro.`);
         }
-    } else if (message.body.startsWith('!pengumuman ')) {
+    } else if (message.body === '!listKategori') {
+    // Menampilkan daftar kategori yang tersedia
+    if (Object.keys(categories).length > 0) {
+        let categoryList = 'Daftar kategori yang tersedia:\n';
+        for (let category in categories) {
+            categoryList += `- ${category}\n`;
+        }
+        message.reply(categoryList);
+    } else {
+        message.reply('Belum ada kategori yang tersedia bro.');
+    }
+ else if (message.body.startsWith('!pengumuman ')) {
         // Mengirim pengumuman ke semua anggota grup
         const announcement = message.body.replace('!pengumuman ', '').trim();
         const chat = await message.getChat();
