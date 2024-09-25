@@ -1,10 +1,15 @@
-const { Client, MessageMedia } = require('whatsapp-web.js');
+const { Client, MessageMedia, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const xlsx = require('xlsx');
 const db = require('./database'); // Import database
 
-const client = new Client();
+// Menggunakan LocalAuth untuk menyimpan sesi secara otomatis
+const client = new Client({
+    authStrategy: new LocalAuth({
+        clientId: "whatsapp-bot" // Sesuaikan dengan nama bot kamu jika perlu
+    })
+});
 
 let saldoAdmin = 0; // Inisialisasi saldo admin
 let categories = {}; // Menyimpan kategori dan anggota yang terdaftar
@@ -16,6 +21,14 @@ client.on('ready', async () => {
 
 client.on('qr', qr => {
     qrcode.generate(qr, { small: true });
+});
+
+client.on('authenticated', () => {
+    console.log('Autentikasi berhasil!');
+});
+
+client.on('auth_failure', msg => {
+    console.error('Autentikasi gagal:', msg);
 });
 
 client.on('message_create', async message => {
@@ -195,102 +208,105 @@ status: selesai
         }
     } else if (message.body.startsWith('!tambahKategori ')) {
         // Menambahkan kategori baru
-        const category = message.body.split(' ')[1];
-        if (category) {
-            db.run(`INSERT OR IGNORE INTO categories (name) VALUES (?)`, [category], function (err) {
-                if (err) {
-                    message.reply('Gagal menambah kategori.');
-                } else if (this.changes === 0) {
-                    message.reply('Kategori ini udah ada bro.');
-                } else {
-                    categories[category] = [];
-                    message.reply(`Kategori ${category} berhasil ditambahkan.`);
-                }
-            });
+        const newCategory = message.body.split(' ')[1];
+        if (newCategory) {
+            if (!categories[newCategory]) {
+                categories[newCategory] = [];
+                db.run(`INSERT INTO categories (category) VALUES (?)`, [newCategory], (err) => {
+                    if (err) {
+                        message.reply('Gagal menambahkan kategori baru.');
+                    } else {
+                        message.reply(`Kategori ${newCategory} udah ditambah.`);
+                    }
+                });
+            } else {
+                message.reply('Kategori ini udah ada bro.');
+            }
         } else {
-            message.reply('Sebutkan nama kategori yang ingin ditambahkan.');
+            message.reply('Masukin nama kategori yang mau ditambah.');
         }
     } else if (message.body.startsWith('!hapusKategori ')) {
         // Menghapus kategori
-        const category = message.body.split(' ')[1];
-        if (category) {
-            db.run(`DELETE FROM categories WHERE name = ?`, [category], function (err) {
+        const deleteCategory = message.body.split(' ')[1];
+        if (deleteCategory && categories[deleteCategory]) {
+            db.run(`DELETE FROM categories WHERE category = ?`, [deleteCategory], (err) => {
                 if (err) {
                     message.reply('Gagal menghapus kategori.');
-                } else if (this.changes === 0) {
-                    message.reply('Kategori ini ga ada bro.');
                 } else {
-                    delete categories[category];
-                    message.reply(`Kategori ${category} berhasil dihapus.`);
+                    delete categories[deleteCategory];
+                    message.reply(`Kategori ${deleteCategory} udah dihapus.`);
                 }
             });
         } else {
-            message.reply('Sebutkan kategori yang ingin dihapus.');
+            message.reply(`Kategori ${deleteCategory} ga ada bro.`);
         }
     } else if (message.body === '!listKategori') {
         // Menampilkan daftar kategori
-        const categoryList = Object.keys(categories);
-        if (categoryList.length > 0) {
-            message.reply(`Daftar Kategori:\n${categoryList.join('\n')}`);
-        } else {
-            message.reply('Belum ada kategori yang ditambahkan bro.');
-        }
-    } else if (message.body.startsWith('!pengumuman ')) {
-        // Mengirim pengumuman ke seluruh anggota grup
-        const announcement = message.body.split(' ').slice(1).join(' ');
-        const chat = await message.getChat();
-        if (chat.isGroup) {
-            let mentionList = chat.participants.map(participant => participant.id._serialized);
-            let announcementMessage = `Pengumuman:\n${announcement}`;
-
-            await chat.sendMessage(announcementMessage, { mentions: mentionList });
-        } else {
-            message.reply('Command ini cuma bisa dipake di grup.');
-        }
+        const categoryList = Object.keys(categories).join(', ');
+        message.reply(`Kategori yang ada sekarang: ${categoryList}`);
     }
 });
 
-// Memuat kategori dan anggotanya dari database saat bot mulai
-async function loadCategories() {
-    db.all(`SELECT name FROM categories`, [], (err, rows) => {
-        if (err) {
-            console.error(err);
-            return;
-        }
-        rows.forEach(row => {
-            categories[row.name] = [];
-        });
-    });
-
-    db.all(`SELECT category, contactId FROM category_members`, [], (err, rows) => {
-        if (err) {
-            console.error(err);
-            return;
-        }
-        rows.forEach(row => {
-            if (!categories[row.category]) {
-                categories[row.category] = [];
-            }
-            categories[row.category].push(row.contactId);
-        });
-    });
-}
-
-// Simpan data transaksi ke file Excel
+// Fungsi untuk menyimpan data ke file Excel
 function saveToExcel() {
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.json_to_sheet([]);
-
-    db.all(`SELECT * FROM transactions`, [], (err, rows) => {
+    const data = [];
+    db.all('SELECT * FROM transactions', [], (err, rows) => {
         if (err) {
             console.error(err);
             return;
         }
-        xlsx.utils.sheet_add_json(ws, rows);
+
+        // Ambil data dari database dan masukkan ke dalam array
+        rows.forEach(row => {
+            data.push({
+                Job: row.job,
+                Hunter: row.hunter,
+                Worker: row.worker,
+                Fee: row.fee,
+                HunterFee: row.hunterFee,
+                WorkerFee: row.workerFee,
+                AdminFee: row.adminFee,
+                Status: row.status
+            });
+        });
+
+        // Buat workbook dan worksheet
+        const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.json_to_sheet(data);
         xlsx.utils.book_append_sheet(wb, ws, 'Rekap Transaksi');
+
+        // Simpan workbook ke file Excel
         xlsx.writeFile(wb, 'rekap_transaksi.xlsx');
     });
 }
 
-// Mulai Client
+// Fungsi untuk memuat kategori dari database
+function loadCategories() {
+    db.all('SELECT * FROM categories', [], (err, rows) => {
+        if (err) {
+            console.error(err);
+            return;
+        }
+
+        rows.forEach(row => {
+            categories[row.category] = [];
+        });
+
+        db.all('SELECT * FROM category_members', [], (err, rows) => {
+            if (err) {
+                console.error(err);
+                return;
+            }
+
+            rows.forEach(row => {
+                if (categories[row.category]) {
+                    categories[row.category].push(row.contactId);
+                }
+            });
+
+            console.log('Kategori dan anggota sudah dimuat dari database.');
+        });
+    });
+}
+
 client.initialize();
