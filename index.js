@@ -130,7 +130,12 @@ status: selesai
             let mentions = chat.participants.map(participant => participant.id._serialized);
             let tagMessage = mentions.map(id => `@${id.split('@')[0]}`).join(' ');
 
-            await chat.sendMessage(tagMessage, { mentions });
+            if (message.hasQuotedMsg) {
+                const quotedMessage = await message.getQuotedMessage();
+                await quotedMessage.reply(tagMessage, null, { mentions });
+            } else {
+                await chat.sendMessage(tagMessage, { mentions });
+            }
         } else {
             message.reply('Command ini cuma bisa dipake di grup bro.');
         }
@@ -141,14 +146,34 @@ status: selesai
             const chat = await message.getChat();
             if (chat.isGroup) {
                 let mentions = categories[category].map(id => id); // Gunakan ID WhatsApp langsung
-                let tagMessage = `Yang udah daftar kategori ${category}: ` + mentions.map(id => `@${id.split('@')[0]}`).join(' ');
+                let tagMessage = `Yang bisa ${category} yuk ` + mentions.map(id => `@${id.split('@')[0]}`).join(' ');
 
-                await chat.sendMessage(tagMessage, { mentions });
+               if (message.hasQuotedMsg) {
+                    const quotedMessage = await message.getQuotedMessage();
+                    await quotedMessage.reply(tagMessage, null, { mentions });
+                } else {
+                    await chat.sendMessage(tagMessage, { mentions });
+                }
             } else {
                 message.reply('Command ini cuma bisa dipake di grup.');
             }
         } else {
             message.reply(`Kategori ${category} ga ada bro.`);
+        }
+    } else if (message.body.startsWith('!pengumuman ')) {
+        const chat = await message.getChat();
+        if (chat.isGroup) {
+            const announcement = message.body.slice(12); // Mengambil pesan setelah '!pengumuman '
+            let mentions = chat.participants.map(participant => participant.id._serialized);
+            let tagMessage = `📢 Pengumuman: ${announcement}\n` + mentions.map(id => `@${id.split('@')[0]}`).join(' ');
+
+            // Mengirim pesan pengumuman dan mereply pesan yang dipicu oleh command
+            await chat.sendMessage(tagMessage, { 
+                mentions, 
+                quotedMessageId: message.id._serialized // Mereply pesan
+            });
+        } else {
+            message.reply('Command ini cuma bisa dipake di grup bro.');
         }
     } else if (message.body.startsWith('!daftar ')) {
         // Mendaftar ke kategori
@@ -198,7 +223,7 @@ status: selesai
                         }
                     });
                 } else {
-                    message.reply(`Kamu belum terdaftar di kategori ${category}.`);
+                    message.reply('Kamu belum daftar di kategori ini.');
                 }
             } else {
                 message.reply('Command ini cuma bisa dipake di grup.');
@@ -208,91 +233,74 @@ status: selesai
         }
     } else if (message.body.startsWith('!tambahKategori ')) {
         // Menambahkan kategori baru
-        const newCategory = message.body.split(' ')[1];
-        if (newCategory) {
-            if (!categories[newCategory]) {
-                categories[newCategory] = [];
-                db.run(`INSERT INTO categories (category) VALUES (?)`, [newCategory], (err) => {
+        const category = message.body.split(' ')[1];
+        if (category) {
+            if (!categories[category]) {
+                categories[category] = [];
+                db.run(`INSERT INTO categories (name) VALUES (?)`, [category], (err) => {
                     if (err) {
-                        message.reply('Gagal menambahkan kategori baru.');
+                        message.reply('Gagal menambahkan kategori.');
                     } else {
-                        message.reply(`Kategori ${newCategory} udah ditambah.`);
+                        message.reply(`Kategori ${category} berhasil ditambahkan.`);
                     }
                 });
             } else {
                 message.reply('Kategori ini udah ada bro.');
             }
         } else {
-            message.reply('Masukin nama kategori yang mau ditambah.');
+            message.reply('Sebutkan nama kategori yang pengen ditambahkan.');
         }
     } else if (message.body.startsWith('!hapusKategori ')) {
         // Menghapus kategori
-        const deleteCategory = message.body.split(' ')[1];
-        if (deleteCategory && categories[deleteCategory]) {
-            db.run(`DELETE FROM categories WHERE category = ?`, [deleteCategory], (err) => {
+        const category = message.body.split(' ')[1];
+        if (category && categories[category]) {
+            db.run(`DELETE FROM categories WHERE name = ?`, [category], (err) => {
                 if (err) {
                     message.reply('Gagal menghapus kategori.');
                 } else {
-                    delete categories[deleteCategory];
-                    message.reply(`Kategori ${deleteCategory} udah dihapus.`);
+                    delete categories[category];
+                    message.reply(`Kategori ${category} berhasil dihapus.`);
                 }
             });
         } else {
-            message.reply(`Kategori ${deleteCategory} ga ada bro.`);
+            message.reply(`Kategori ${category} ga ada.`);
         }
     } else if (message.body === '!listKategori') {
         // Menampilkan daftar kategori
-        const categoryList = Object.keys(categories).join(', ');
-        message.reply(`Kategori yang ada sekarang: ${categoryList}`);
+        const list = Object.keys(categories).length > 0 ? Object.keys(categories).join(', ') : 'Belum ada kategori.';
+        message.reply(`Daftar kategori: ${list}`);
     }
 });
 
-// Fungsi untuk menyimpan data ke file Excel
+// Fungsi untuk menyimpan data transaksi ke Excel
 function saveToExcel() {
-    const data = [];
-    db.all('SELECT * FROM transactions', [], (err, rows) => {
+    db.all(`SELECT * FROM transactions`, [], (err, rows) => {
         if (err) {
             console.error(err);
             return;
         }
 
-        // Ambil data dari database dan masukkan ke dalam array
-        rows.forEach(row => {
-            data.push({
-                Job: row.job,
-                Hunter: row.hunter,
-                Worker: row.worker,
-                Fee: row.fee,
-                HunterFee: row.hunterFee,
-                WorkerFee: row.workerFee,
-                AdminFee: row.adminFee,
-                Status: row.status
-            });
-        });
-
-        // Buat workbook dan worksheet
         const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(data);
+        const ws = xlsx.utils.json_to_sheet(rows);
         xlsx.utils.book_append_sheet(wb, ws, 'Rekap Transaksi');
 
-        // Simpan workbook ke file Excel
         xlsx.writeFile(wb, 'rekap_transaksi.xlsx');
     });
 }
 
 // Fungsi untuk memuat kategori dari database
 function loadCategories() {
-    db.all('SELECT * FROM categories', [], (err, rows) => {
+    db.all(`SELECT name FROM categories`, [], (err, rows) => {
         if (err) {
             console.error(err);
             return;
         }
 
         rows.forEach(row => {
-            categories[row.category] = [];
+            categories[row.name] = [];
         });
 
-        db.all('SELECT * FROM category_members', [], (err, rows) => {
+        db.all(`SELECT * FROM category_members`, [], (err, rows) => {
             if (err) {
                 console.error(err);
                 return;
@@ -303,10 +311,9 @@ function loadCategories() {
                     categories[row.category].push(row.contactId);
                 }
             });
-
-            console.log('Kategori dan anggota sudah dimuat dari database.');
         });
     });
 }
 
+// Mulai client
 client.initialize();
